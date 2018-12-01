@@ -13,16 +13,18 @@ import numpy as np
 import random
 from keras.models import load_model
 import pickle
+import os
 
 # System Settings
 ASSETS = ['BCH-USD', 'BTC-USD', 'ETH-USD', 'LTC-USD']
 ORIGIN_FEATURES = ['close', 'high', 'low', 'open', 'volume']
-asset_names = ['BCH', 'BTC', 'ETH', 'LTC']
+ASSETS_NAME = ['BCH', 'BTC', 'ETH', 'LTC']
 LONG, SHORT, HOLD = [1, 0, -1]
+MODEL_PATH = './models/'
 
 # User Settings
 CONFIDENCE_SCOPE = 0.005
-EXPECT_RETURN_RATE = 0.05
+EXPECT_RETURN_RATE = 0.1
 DECISION_PERIOD = 60      # Number of minutes to generate next new bar
 BAR_LENGTH = 120
 
@@ -40,23 +42,8 @@ DEAL_UNITS = [6, 1, 8, 12]      # unit amount for each deal DECISION_PERIOD orig
 
 # loal model here, and append models into model List
 model_list = []
-# for model_name in ASSETS:
-#     # model_path = f'./model_{model_name.lower()}.joblib'
-#     # model_list.append(joblib.load(model_path))
-#     with open('model_'+model_name.split('-')[0]+'.pickle', 'rb') as f:
-#         model_list.append(pickle.load(f))
-with open('model_BCH.pickle', 'rb') as f:
-    model_BCH = pickle.load(f)
-    model_list.append(model_BCH)
-with open('model_BTC.pickle', 'rb') as f:
-    model_BTC = pickle.load(f)
-    model_list.append(model_BTC)
-with open('model_ETH.pickle', 'rb') as f:
-    model_ETH = pickle.load(f)
-    model_list.append(model_ETH)
-with open('model_LTC.pickle', 'rb') as f:
-    model_LTC = pickle.load(f)
-    model_list.append(model_LTC)
+for model_name in ASSETS:
+    model_list = load_model(os.path.join(MODEL_PATH, f'{model_name}_model_1809_1811.h5'))
 
 # decision_count=0
 # failed_count = 0
@@ -91,8 +78,12 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
     # for rising/falling prediction, long/short one unit of & according to the confidence to calculate the goal price, once it reachs sell the crypto.
 
     # TODO: embeded utility functions
-    def get_income_rate():
-        pass
+
+    def get_income_rate(position, cryp_balance, current_price, transaction):
+        return_balance = position * current_price
+        transaction_cost = position * current_price * transaction
+        return_rate = (abs(cryp_balance-return_balance) - transaction_cost) / cryp_balance
+        return return_rate
 
     def get_confidence():
         pass
@@ -101,26 +92,16 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
     if counter == 0:
         # data_save only saves data in the latest decision period (1 hour)
         memory.data_save = dict.fromkeys(ASSETS, pd.DataFrame(columns = ORIGIN_FEATURES))
-        # memory.old_data = dict.fromkeys(ASSETS)     # bakck up of data_save after one period
+        memory.old_data = dict.fromkeys(ASSETS)     # bakck up of data_save after one period
         memory.deal_save = dict.fromkeys(ASSETS, [])
         memory.turning_price = dict.fromkeys(ASSETS, 0)     
-        memory.volumn_price = dict.fromkeys(ASSETS, 0)      # total money spent on the cryptos
+        memory.invested_balance = dict.fromkeys(ASSETS, 0)      # total money spent on the cryptos
 
         memory.is_satisfied = False     # If True, stop to make deal
         memory.models_cof = [1 for i in range(len(model_list))]     # confidence for each model
         memory.use_model = [True for i in range(len(model_list))]   # use model or not (this is for ensembled model)
 
         memory.success_count = dict.fromkeys(ASSETS, 0)
-
-        memory.data_save = []
-        memory.data_cryp = []
-        for i in list(range(4)):
-            #memory.data_save = np.zeros((DECISION_PERIOD, 5))#, dtype=np.float64)
-            memory.data_save.append(pd.DataFrame(columns = ['close', 'high', 'low', 'open', 'volume']))
-            memory.data_cryp.append(pd.DataFrame(columns = ['close', 'high', 'low', 'open', 'volume']))
-        memory.hourly = pd.DataFrame(columns = ['rate_BCH', 'dVolume_BCH', 'rate_BTC', 'dVolume_BTC',
-                                                'rate_ETH', 'dVolume_ETH', 'rate_LTC', 'dVolume_LTC'])
-
     
     # data preprocess & record update
     position_new = position_current
@@ -130,78 +111,6 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
         memory.is_satisfied = True
     else:
         memory.is_satisfied = False
-
-    
-    if ((counter + 1) % DECISION_PERIOD == 0):
-        for i in list(range(4)):
-            memory.data_save[i].loc[DECISION_PERIOD - 1] = data[i, ]
-            line = generate_bar(memory.data_save[i])
-            memory.data_cryp[i] = pd.concat((memory.data_cryp[i], line), axis=0)
-            memory.data_cryp[i] = memory.data_cryp[i].reset_index(drop=True)
-
-    else:
-        for i in list(range(4)):
-            memory.data_save[i].loc[(counter + 1) % DECISION_PERIOD - 1] = data[i,]
-
-    df_cryp_sp = []
-    for i in list(range(4)):
-        df_cryp = memory.data_cryp[i].copy()
-        if len(df_cryp)>1:
-
-            df_cryp['rate'] = (df_cryp['close'] -df_cryp['open']) / df_cryp['open']
-            volume = pd.DataFrame(df_cryp['volume'][0:len(df_cryp)-1], columns=['volume'])
-            df_cryp = df_cryp.drop(0).reset_index(drop = True)
-            df_cryp['dVolume'] = abs((df_cryp['volume'] - volume['volume']) / volume['volume'])
-            df_cryp = df_cryp[['rate', 'dVolume']]
-            rateName = 'rate_' + asset_names[i]
-            dVolumeName = 'dVolume_' + asset_names[i]
-            df_cryp.columns = [rateName, dVolumeName]
-            df_cryp_sp.append(df_cryp)
-            memory.data_cryp[i] = memory.data_cryp[i].drop(0).reset_index(drop=True)
-    if df_cryp_sp:
-        cryp_data = pd.DataFrame()
-        for cryp in df_cryp_sp:
-            cryp_data = pd.concat((cryp_data, cryp), axis=1)
-        memory.hourly = pd.concat((memory.hourly, cryp_data), axis=0).reset_index(drop=True)
-
-    y = []
-
-    if len(memory.hourly)>2:
-        df_hourly = memory.hourly.copy()
-        for name in asset_names:
-            bins = [-1, -0.005, 0.01, 1]
-            group_name = ['down', 'middle', 'up']
-            predName = 'pred_' + name
-            rateName = 'rate_' + name
-            df_hourly[predName] = pd.cut(df_hourly[rateName], bins, labels=group_name)
-            bins_volume = [0, 2.01, 100]
-            group_volume_name = ['flat', 'sharp']
-            dVolumeName = 'dVolume_' + name
-            df_hourly[dVolumeName] = pd.cut(df_hourly[dVolumeName], bins_volume, labels=group_volume_name)
-        df_hourly = df_hourly[
-            ['pred_BCH', 'pred_BTC', 'pred_ETH', 'pred_LTC', 'dVolume_BCH', 'dVolume_BTC', 'dVolume_ETH',
-             'dVolume_LTC']]
-        df_cryp_t0 = pd.DataFrame(df_hourly.loc[0:len(memory.hourly) - 3])
-        df_cryp_t0.columns = ['BCH_t0', 'BTC_t0', 'ETH_t0', 'LTC_t0', 'dV_BCH_t0', 'dV_BTC_t0', 'dV_ETH_t0',
-                              'dV_LTC_t0']
-        df_cryp_t0 = df_cryp_t0.reset_index(drop=True)
-        df_cryp_t1 = pd.DataFrame(df_hourly.loc[1:len(memory.hourly) - 2])
-        df_cryp_t1.columns = ['BCH_t1', 'BTC_t1', 'ETH_t1', 'LTC_t1', 'dV_BCH_t1', 'dV_BTC_t1', 'dV_ETH_t1',
-                              'dV_LTC_t1']
-        df_cryp_t1 = df_cryp_t1.reset_index(drop=True)
-        df_hourly = df_hourly.drop([0,1]).reset_index(drop=True)
-        df_hourly = pd.concat((df_hourly, df_cryp_t0), axis=1)
-        df_hourly = pd.concat((df_hourly, df_cryp_t1), axis=1)
-        X_train = df_hourly.drop(columns=['pred_BCH', 'pred_BTC', 'pred_ETH', 'pred_LTC'])
-
-        X_train = pd.get_dummies(X_train)
-        y_BCH = model_BCH.predict(X_train)
-        y_BTC = model_BTC.predict(X_train)
-        y_ETH = model_ETH.predict(X_train)
-        y_LTC = model_LTC.predict(X_train)
-        y = [y_BCH, y_BTC, y_ETH, y_LTC]
-
-        memory.hourly = memory.hourly.drop(0).reset_index(drop=True)
 
     # for each asset do the predict and make deal.
     for asset_index in range(4):
@@ -213,14 +122,15 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
             continue
 
         asset_name = ASSETS[asset_index]
-        fluctuate_volumn = FLUCTUATE_VOLUMNS[asset_index]
+        # fluctuate_volumn = FLUCTUATE_VOLUMNS[asset_index]
         deal_unit = DEAL_UNITS[asset_index]
         average_price = average_prices[asset_index]
 
-        # memory.data_save[asset_name].loc[counter] = data[asset_index,]
+        # BUG: counter pre used
+        memory.data_save[asset_name].loc[counter] = data[asset_index,]
         
         # predict in DECISION_PERIOD
-        if (len(memory.hourly)>2 and (counter+1) % DECISION_PERIOD == 0 and int((counter+1) / DECISION_PERIOD) > 1):
+        if ((counter+1) % DECISION_PERIOD == 0):    
             # Risk Ananlysis
             if check_balance_warning(cash_balance, crypto_balance, total_balance, CASH_BALANCE_LOWER_LIMIT):
                 continue
@@ -254,11 +164,7 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
                 # if abs(price_change) > average_price * CONFIDENCE_SCOPE :     # 1 or 0 or other value
                 #     prediction = LONG if price_change > 0 else SHORT
                 # else:
-                #     prediction = HOLD # hold the line
-                if y[asset_index] == 'up':
-                    prediction = LONG
-                elif y[asset_index] == 'down':
-                    prediction = SHORT
+                #     prediction = HOLD # hold the lines
 
             else:   # NOT sure is it a better way to replacce model prediction
                 # don't use model. judge trend based on the average price of last DECISION_PERIOD & current price.
@@ -273,26 +179,26 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
                 if position_new[asset_index] > 0:
                     position_new[asset_index] += int(deal_unit * memory.models_cof[asset_index])
                     # Assume that new open = last close or avg
-                    memory.volume_price[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price       
+                    memory.invested_balance[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price       
                 elif position_new[asset_index] == 0:
                     position_new[asset_index] += int(deal_unit * memory.models_cof[asset_index])
                     memory.turning_price[asset_name] = average_price
-                    memory.volume_price[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price
+                    memory.invested_balance[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price
                 else:
                     position_new[asset_index] = 0
-                    memory.volume_price[asset_name] = 0
+                    memory.invested_balance[asset_name] = 0
             elif prediction == SHORT:
                 deal_type = 'short'
                 if position_new[asset_index] <= 0:
                     position_new[asset_index] -= int(deal_unit * memory.models_cof[asset_index])
-                    memory.volume_price[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price
+                    memory.invested_balance[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price
                 elif position_new[asset_index] == 0:
                     position_new[asset_index] -= int(deal_unit * memory.models_cof[asset_index])
                     memory.turning_price[asset_name] = average_price
-                    memory.volume_price[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price       
+                    memory.invested_balance[asset_name] += int(deal_unit * memory.models_cof[asset_index]) * average_price       
                 else:
                     position_new[asset_index] = 0
-                    memory.volume_price[asset_name] = 0
+                    memory.invested_balance[asset_name] = 0
             else: # HOLD
                 deal_type = 'none'
 
@@ -304,21 +210,14 @@ def handle_bar(counter,  # a counter for number of minute bars that have already
             # deal.goal_price = deal_price + (1 if deal_type == 'long' else -1) * (PRIOR_WEIGHT * PRIOR + confidence) * fluctuate_volumn
             deal.deal_type = deal_type
             deal.prediction = prediction
-            # deal.has_selled = False
-            # deal.has_brought = False
             memory.deal_save.append(deal)
         
         elif(counter != 0):   # not decision period & not the first minute
             # if current currency price can give double expect return, clean position
-            # if (position_new[asset_index] > 0) and (average_price >= memory.turning_price[asset_name]*(1+2*EXPECT_RETURN_RATE)):
-            #     position_new[asset_index] = 0
-            # if (position_new[asset_index] < 0) and (average_price <= memory.turning_price[asset_name]*(1-2*EXPECT_RETURN_RATE)):
-            #     position_new[asset_index] = 0
-            if (position_new[asset_index] > 0) and (average_price * position_new[asset_index] >= memory.volume_price[asset_name]*(1+1*EXPECT_RETURN_RATE)):
+            return_rate = get_income_rate(position_new[asset_index], memory.invested_balance[asset_name], average_price, transaction)
+            if return_rate >= EXPECT_RETURN_RATE:
                 position_new[asset_index] = 0
-            if (position_new[asset_index] < 0) and (average_price * position_new[asset_index] <= memory.volume_price[asset_name]*(1-1*EXPECT_RETURN_RATE)):
-                position_new[asset_index] = 0
+                memory.invested_balance[asset_name] = 0
             
-        
     # End of strategy
     return position_new, memory

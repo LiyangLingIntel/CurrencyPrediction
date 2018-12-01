@@ -75,7 +75,7 @@ def generate_bar(data):
     high = data['high'].max()
     low = data['low'].min()
     volume_ave = data['volume'].mean()
-    # prive_avg = np.mean(data[:, :4], axis=1)
-    OHLC = pd.DataFrame(data = [[close, high, low, open_price, volume_ave]], columns = ['close', 'high', 'low', 'open', 'volume'])
+    price_avg = data[['close', 'high', 'low', 'open']].mean(axis=1)
+    OHLC = pd.DataFrame(data = [[close, high, low, open_price, price_avg, volume_ave]], columns = ['close', 'high', 'low', 'open', 'avg', 'volume'])
 
     return OHLC
